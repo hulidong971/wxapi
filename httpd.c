@@ -336,7 +336,8 @@ void not_found(int client)
 /* Parameters: the socket to print the headers on
  *             the name of the file */
 /**********************************************************************/
-void headers(int client, const int len)
+
+void headers(int client, const cha* filename)
 {
  char buf[1024];
  (void)filename;  /* could use filename to determine file type */
@@ -345,11 +346,11 @@ void headers(int client, const int len)
  send(client, buf, strlen(buf), 0);
  sprintf(buf, "Content-Type: text/html\r\n");
  send(client, buf, strlen(buf), 0);
- sprintf(buf, "Content-Length: %u\r\n",len);
- send(client, buf, strlen(buf), 0);
  strcpy(buf, "\r\n");
  send(client, buf, strlen(buf), 0);
 }
+
+
 /**********************************************************************/
 /* Put the entire contents of a file out on a socket.  This function
  * is named after the UNIX "cat" command, because it might have been
@@ -368,6 +369,7 @@ void cat(int client, FILE *resource)
   fgets(buf, sizeof(buf), resource);
  }
 }
+
 /**********************************************************************/
 /* Send a regular file to the client.  Use headers, and report
  * errors to client if they occur.
@@ -375,6 +377,7 @@ void cat(int client, FILE *resource)
  *              file descriptor
  *             the name of the file to serve */
 /**********************************************************************/
+#if 0
 void serve_file(int client, const char *filename)
 {
  FILE *resource = NULL;
@@ -395,7 +398,12 @@ void serve_file(int client, const char *filename)
  }
  fclose(resource);
 }
-
+#else
+void serve_file(int client,  char *filename)
+{
+    wx_handle_request(client,filename);
+}
+#endif
 /**********************************************************************/
 /* This function starts the process of listening for web connections
  * on a specified port.  If the port is 0, then dynamically allocate a

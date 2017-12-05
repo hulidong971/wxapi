@@ -134,24 +134,6 @@ void bad_request(int client)
  send(client, buf, sizeof(buf), 0);
 }
 
-/**********************************************************************/
-/* Put the entire contents of a file out on a socket.  This function
- * is named after the UNIX "cat" command, because it might have been
- * easier just to do something like pipe, fork, and exec("cat").
- * Parameters: the client socket descriptor
- *             FILE pointer for the file to cat */
-/**********************************************************************/
-void cat(int client, FILE *resource)
-{
- char buf[1024];
-
- fgets(buf, sizeof(buf), resource);
- while (!feof(resource))
- {
-  send(client, buf, strlen(buf), 0);
-  fgets(buf, sizeof(buf), resource);
- }
-}
 
 /**********************************************************************/
 /* Inform the client that a CGI script could not be executed.
@@ -321,25 +303,7 @@ int get_line(int sock, char *buf, int size)
  return(i);
 }
 
-/**********************************************************************/
-/* Return the informational HTTP headers about a file. */
-/* Parameters: the socket to print the headers on
- *             the name of the file */
-/**********************************************************************/
-void headers(int client, const char *filename)
-{
- char buf[1024];
- (void)filename;  /* could use filename to determine file type */
 
- strcpy(buf, "HTTP/1.0 200 OK\r\n");
- send(client, buf, strlen(buf), 0);
- strcpy(buf, SERVER_STRING);
- send(client, buf, strlen(buf), 0);
- sprintf(buf, "Content-Type: text/html\r\n");
- send(client, buf, strlen(buf), 0);
- strcpy(buf, "\r\n");
- send(client, buf, strlen(buf), 0);
-}
 
 /**********************************************************************/
 /* Give a client a 404 not found status message. */
@@ -367,7 +331,43 @@ void not_found(int client)
  sprintf(buf, "</BODY></HTML>\r\n");
  send(client, buf, strlen(buf), 0);
 }
+/**********************************************************************/
+/* Return the informational HTTP headers about a file. */
+/* Parameters: the socket to print the headers on
+ *             the name of the file */
+/**********************************************************************/
+void headers(int client, const int len)
+{
+ char buf[1024];
+ (void)filename;  /* could use filename to determine file type */
 
+ strcpy(buf, "HTTP/1.0 200 OK\r\n");
+ send(client, buf, strlen(buf), 0);
+ sprintf(buf, "Content-Type: text/html\r\n");
+ send(client, buf, strlen(buf), 0);
+ sprintf(buf, "Content-Length: %u\r\n",len);
+ send(client, buf, strlen(buf), 0);
+ strcpy(buf, "\r\n");
+ send(client, buf, strlen(buf), 0);
+}
+/**********************************************************************/
+/* Put the entire contents of a file out on a socket.  This function
+ * is named after the UNIX "cat" command, because it might have been
+ * easier just to do something like pipe, fork, and exec("cat").
+ * Parameters: the client socket descriptor
+ *             FILE pointer for the file to cat */
+/**********************************************************************/
+void cat(int client, FILE *resource)
+{
+ char buf[1024];
+
+ fgets(buf, sizeof(buf), resource);
+ while (!feof(resource))
+ {
+  send(client, buf, strlen(buf), 0);
+  fgets(buf, sizeof(buf), resource);
+ }
+}
 /**********************************************************************/
 /* Send a regular file to the client.  Use headers, and report
  * errors to client if they occur.

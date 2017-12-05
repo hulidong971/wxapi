@@ -309,7 +309,22 @@ int save_scancode_to_file(char* file,char* image,int len)
     fclose(fp);
     return 0;
 }
-int main(int argc, char* argv[])
+void wx_send_response(int client, int len,char* body)
+{
+ char buf[1024];
+
+ strcpy(buf, "HTTP/1.0 200 OK\r\n");
+ send(client, buf, strlen(buf), 0);
+ sprintf(buf, "Content-Type: img/jpeg\r\n");
+ send(client, buf, strlen(buf), 0);
+ sprintf(buf, "Content-Length: %u\r\n",len);
+ send(client, buf, strlen(buf), 0);
+ strcpy(buf, "\r\n");
+ send(client, buf, strlen(buf), 0);
+ send(client,body,len,0);
+}
+
+int wx_handle_request(int client,char* filename)
 {
     char uuid[64];
     char image[65536];
@@ -330,7 +345,7 @@ int main(int argc, char* argv[])
        printf(" get scancode  error ! \n");
        return -1;     
      }
-
+     wx_send_response(client,imglen,image);
 login:
     if (wx_get_login_url(image,sizeof(image),uuid) <= 0 && i++ < 3)
      {

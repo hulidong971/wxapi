@@ -4,12 +4,8 @@
 #include <string.h>
 #include <curl/curl.h>
 #include <curl/easy.h>
+#include "cjson.h"
 
-#define UUID_CMD_STR "https://login.wx.qq.com/jslogin"
-#define PARAM1_STR  "?appid=wx782c26e4c19acffb"
-#define PARAM2_STR  "&redirect_uri=https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxnewloginpage"
-#define PARAM3_STR  "&lang=zh_CN"
-#define PARAM4_STR  "&_=%u"
 
 typedef struct recv_param_s
 {
@@ -17,6 +13,16 @@ typedef struct recv_param_s
     int len;
     int offset;
 }recv_param_t;
+
+int wx_save_data(char* file,char* image,int len)
+{
+    FILE* fp;
+    if ((fp = fopen(file,"w")) == NULL)
+       return -1;
+    fwrite(image,1,len,fp);
+    fclose(fp);
+    return 0;
+}
 
 static size_t write_data(void *ptr, size_t cnt, size_t nmemb, void *user)  
 {
@@ -51,7 +57,7 @@ static int http_get_data(char* url,recv_param_t*  recv)
 
     if ((curl = curl_easy_init()) == NULL)
         return -1;
-  curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); 
+//    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, recv);
@@ -67,14 +73,16 @@ static int http_post_data(char* url,char* data ,recv_param_t*  recv)
 {
     CURL *curl;
     struct curl_slist *slist=NULL;
- 
-    printf("http_post_data: [%s] \n",data);
+
+//    printf("http_post_data: [%s] \n",data);
+
     slist = curl_slist_append(slist, "Content-Type: application/json; charset=UTF-8");
 
     if ((curl = curl_easy_init()) == NULL)
         return -1;
+
+//    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); 
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
@@ -92,7 +100,8 @@ static int parse_data_from_response(char* resp,char* buf,int len)
 {
     char *tmp1, *tmp2;
 
-    printf("parse_data_from_response: [%s]\n",resp);
+
+//    printf("parse_data_from_response: [%s] \n",resp);
 
     if(strstr(resp,"200") == NULL)
         return -1; 
@@ -114,7 +123,7 @@ int wx_get_uuid(char* uuid,int len)
 {
     char url[256];
     recv_param_t recv;
-    char* cmd_str = UUID_CMD_STR PARAM1_STR PARAM2_STR PARAM3_STR PARAM4_STR;
+    char* cmd_str = "https://login.weixin.qq.com/jslogin?appid=wx782c26e4c19acffb&fun=new&lang=zh_CN&_=%u";
     long tm = time(NULL);
     int ret = -1; 
 
@@ -181,16 +190,25 @@ typedef struct wx_param_s
     char skey[128];
     char sid[128];
     char pass_ticket[256];
-    char uin[128];  
+    char uin[128]; 
+    char devid[32];
+    char name[128];
 }wx_param_t;
 
 int parse_param_from_response(char* resp,wx_param_t* param)
 {
     char *tmp1, *tmp2;
+    int i;
 
-    printf("[%s]: [%s] \n",__FUNCTION__,resp);
-   
+//    printf("[%s]:  %s \n",__FUNCTION__,resp);
+
+
     memset(param,0,sizeof(wx_param_t));
+
+    param->devid[0] = 'e';
+    for(i=1;i<16;i++)
+        param->devid[i] = rand() % 10 + '0';
+    param->devid[16] = 0;
 
     if ((tmp1 = strstr(resp,"<skey>")) == NULL)
          return -1;
@@ -212,10 +230,12 @@ int parse_param_from_response(char* resp,wx_param_t* param)
    if ((tmp2 = strstr(tmp1+1,"</pass_ticket>")) == NULL)
           return -1;
     memcpy(param->pass_ticket,tmp1+13,tmp2-tmp1-13);
+#if 0
     printf("[%s]: skey[%s] \n",__FUNCTION__,param->skey); 
     printf("[%s]: sid[%s] \n",__FUNCTION__,param->sid); 
     printf("[%s]: uin[%s] \n",__FUNCTION__,param->uin); 
     printf("[%s]: pass[%s] \n",__FUNCTION__,param->pass_ticket);      
+#endif
     return 1;
 }
 
@@ -241,27 +261,82 @@ int wx_get_login_param(wx_param_t* param,char* redirect)
     return ret;
 }
 
-typedef struct wx_userinfo_s
-{
-    char name[128];
-}wx_userinfo_t;
 
-int parse_userinfo_from_response(char* resp,wx_userinfo_t* info)
+static int wx_get_resp_retcode(cJSON* obj)
 {
-    int i,len;
-    printf("[%s]: [%s] \n",__FUNCTION__,resp);
-    len = strlen(resp);
-//    for(i=0;i<len;i++)
-//         printf("%02x ",resp[i]);
+    if ((obj = cJSON_GetObjectItemCaseSensitive(obj,"BaseResponse")) == NULL)
+    {
+       printf("[%s]: parse JSON(BaseResponse) fail \n",__FUNCTION__);
+       return -1;
+    }
 
-    return 1;
+    if ((obj = cJSON_GetObjectItemCaseSensitive(obj,"Ret")) == NULL)
+    {
+       printf("[%s]: parse JSON(Ret) fail \n",__FUNCTION__);
+       return -1;
+    }
+
+   return obj->valueint;
 }
 
-int wx_get_self_info(wx_userinfo_t* info, wx_param_t* param)
+static int wx_parse_retcode_from_response(char* resp)
+{
+    cJSON* root;
+    int ret;
+
+//    printf("[%s]: %s \n",__FUNCTION__,resp);
+
+    if ((root = cJSON_Parse(resp)) == NULL)
+    {
+       fprintf(stderr,"[%s]: parse JSON(root) fail \n",__FUNCTION__);
+       return -1;
+    }
+    ret = wx_get_resp_retcode(root);
+    cJSON_Delete(root);
+    return  ret; 
+}
+static int wx_parse_userinfo_from_response(char* resp,wx_param_t* param)
+{
+    cJSON* obj,*root;
+    param->name[0] = 0;
+
+//   printf("[%s]: %s \n",__FUNCTION__,resp);
+
+    if ((root = cJSON_Parse(resp)) == NULL)
+    {
+       fprintf(stderr,"[%s]: parse JSON(root) fail \n",__FUNCTION__);
+       return -1;
+    }
+
+    if (wx_get_resp_retcode(root) != 0)
+    {
+       fprintf(stderr,"[%s]: parse JSON(retcode) fail \n",__FUNCTION__);
+        goto exit;
+    }
+
+    if ((obj = cJSON_GetObjectItemCaseSensitive(root,"User")) == NULL)
+    {
+       fprintf(stderr,"[%s]: parse JSON(user) fail \n",__FUNCTION__);
+       goto exit;
+    }
+
+    if ((obj = cJSON_GetObjectItemCaseSensitive(obj,"UserName")) == NULL)
+    {
+       fprintf(stderr,"[%s]: parse JSON(username) fail \n",__FUNCTION__);
+       goto exit;
+    }
+    strcpy(param->name,obj->valuestring);
+
+exit:
+    cJSON_Delete(root);
+    return strlen(param->name);
+}
+
+#define FMT_WX_BASE_REQUEST  "\"BaseRequest\": {\n\"DeviceID\": \"%s\",\n\"Sid\": \"%s\",\n\"Skey\": \"%s\",\n\"Uin\": \"\%s\"\n}"
+int wx_get_self_info(wx_param_t* param)
 {
     char url[256];
     char data[2048];
-    char deviceid[32];
     int i;
     char* cmd_str = "https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxinit?r=%u&lang=ch_ZN&pass_ticket=%s";
     long tm = time(NULL);
@@ -269,20 +344,17 @@ int wx_get_self_info(wx_userinfo_t* info, wx_param_t* param)
     int ret = -1;
 
     memset(&recv,0,sizeof(recv));
-    deviceid[0] = 'e';
-    for(i=1;i<16;i++)
-        deviceid[i] = rand() % 10 + '0';
-    deviceid[16] = 0;
+
     sprintf(url,cmd_str,~tm,param->pass_ticket);
-    sprintf(data,"{\n\"BaseRequest\": {\n\"DeviceID\": \"%s\",\n\"Sid\": \"%s\",\n\"Skey\": \"%s\",\n\"Uin\": \"\%s\"\n}\n}", 
-             deviceid,param->sid,param->skey,param->uin);
+
+    sprintf(data,"{\n" FMT_WX_BASE_REQUEST "\n}",  param->devid,param->sid,param->skey,param->uin);
 
     if (http_post_data(url,data,&recv) <= 0)
         return -1;  
   
     if (recv.buf != NULL)
      {
-       ret = parse_userinfo_from_response(recv.buf,info);
+       ret = wx_parse_userinfo_from_response(recv.buf,param);
        free(recv.buf);
      }
     return ret;
@@ -291,82 +363,271 @@ int wx_get_self_info(wx_userinfo_t* info, wx_param_t* param)
 typedef struct wx_contact_s
 {
     char name[128];
+    char nick[64];
     char type;
     char sex;
 }wx_contact_t;
 
+
+
+static int wx_parse_contacts_from_response(char* resp, wx_contact_t* ct,int size)
+{
+    cJSON* obj,*root,*list,*item;
+    int num,i;
+
+//    printf("[%s]: %s \n",__FUNCTION__,resp);
+
+    if ((root = cJSON_Parse(resp)) == NULL)
+    {
+       printf("[%s]: parse JSON(root) fail \n",__FUNCTION__);
+       return -1;
+    }
+    if (wx_get_resp_retcode(root) != 0)
+    {
+       printf("[%s]: parse JSON(retcode) fail \n",__FUNCTION__);
+       return -1;
+    }
+
+    if ((obj = cJSON_GetObjectItemCaseSensitive(root,"MemberList")) == NULL)
+    {
+       printf("[%s]: parse JSON(user) fail \n",__FUNCTION__);
+       return -1;
+    }
+
+    if ((num = cJSON_GetArraySize(obj) ) <= 0)
+    {
+       printf("[%s]: get contact num fail [%d] \n",__FUNCTION__,num);
+       return -1;
+    }	
+
+    list = obj;
+
+    if (num > size)
+       num = size;
+
+    for(i=0;i<num;i++)
+    {
+       if ((item = cJSON_GetArrayItem(list,i)) == NULL)
+       {
+         printf("[%s]: get array item [%d] fail \n",__FUNCTION__,i);
+         return -1;
+       }
+
+       if ((obj = cJSON_GetObjectItemCaseSensitive(item,"UserName")) == NULL)
+       {
+         printf("[%s]: parse JSON(UserName) fail \n",__FUNCTION__);
+         return -1;
+       }
+
+       strcpy(ct[i].name,obj->valuestring);
+
+       if ((obj = cJSON_GetObjectItemCaseSensitive(item,"NickName")) == NULL)
+       {
+         printf("[%s]: parse JSON(NickName) fail \n",__FUNCTION__);
+         return -1;
+       }
+
+       strcpy(ct[i].nick,obj->valuestring);
+    }
+
+    cJSON_Delete(root);
+
+    return num;
+}
+
+char* wx_find_user_by_nick(char* nick,wx_contact_t* ct,int len)
+{
+    int i;
+    for(i=0;i<len;i++)
+    {
+      if (strcmp(ct[i].nick,nick)==0)
+         return  ct[i].name;
+    } 
+    return NULL;
+}
+
+
+static int wx_print_contact(wx_contact_t* ct,int num)
+{
+    int i;
+
+    for(i = 0;i< num; i++)
+       printf("Contact[%]: name [%s] nick[%s] \n",ct[i].name,ct[i].nick);
+    return 0;
+}
+
 int wx_get_all_contacts(wx_contact_t* ct,int size,wx_param_t* param)
 {
-    return 0;
+    char url[256];
+    char data[2048];
+    char deviceid[32];
+    int i;  
+    char* cmd_str = "https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxgetcontact?r=%u&lang=ch_ZN&pass_ticket=%s";
+    long tm = time(NULL);
+    recv_param_t recv;
+    int ret = -1;
+
+    memset(&recv,0,sizeof(recv));
+
+    sprintf(url,cmd_str,~tm,param->pass_ticket);
+    sprintf(data,"{\n" FMT_WX_BASE_REQUEST "\n}", 
+             param->devid,param->sid,param->skey,param->uin);
+
+    if (http_post_data(url,data,&recv) <= 0)
+        return -1;  
+  
+    if (recv.buf != NULL)
+     {
+       ret = wx_parse_contacts_from_response(recv.buf,ct,size);
+       free(recv.buf);
+     }
+    return ret;
 }
 
-int save_scancode_to_file(char* file,char* image,int len)
+
+#define FMT_WX_MSG "\"Msg\": {\n\"Type\":1,\n\"Content\":\"%s\",\n\"FromUserName\":\"%s\",\n\"ToUserName\":\"%s\",\n\"ClientMsgId\":\"%u\",\n\"LocalID\":\"%u\"\n}"
+int  wx_send_msg(char* userid,char* msg,wx_param_t* param)
 {
-    FILE* fp;
-    if ((fp = fopen(file,"w")) == NULL)
-       return -1;
-    fwrite(image,1,len,fp);
-    fclose(fp);
-    return 0;
+    char url[256];
+    char data[2048];
+    char deviceid[32];
+    char* cmd_str = "https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxsendmsg?r=%u&lang=ch_ZN&pass_ticket=%s";
+    long tm = time(NULL);
+    recv_param_t recv;
+    int ret = -1,tmid;
+
+    if (userid == NULL || msg == NULL)
+        return -1;
+
+    memset(&recv,0,sizeof(recv));
+
+    sprintf(url,cmd_str,~tm,param->pass_ticket);
+
+    tmid = (tm << 4) | (rand()%16);
+    sprintf(data,"{\n" FMT_WX_BASE_REQUEST ", \n" FMT_WX_MSG "\n}", param->devid,param->sid,param->skey,param->uin,msg,param->name,userid,tm,tm);
+
+    if (http_post_data(url,data,&recv) <= 0)
+        return -1;  
+  
+    if (recv.buf != NULL)
+     {
+       ret = wx_parse_retcode_from_response(recv.buf);
+       free(recv.buf);
+     }
+    return ret;
 }
+//Return: the nmber of user be sent to message
+int wx_send_msg_to_all(wx_contact_t* ct,int len,char* msg,wx_param_t* param)
+{
+    int i;
+   
+    for(i=0;i< len;i++)
+    {
+       if (wx_send_msg(ct[i].name,msg,param) != 0)
+          return i;
+    }
+    return len;
+}
+
 void wx_send_response(int client, int len,char* body)
 {
- char buf[1024];
+   char buf[1024];
 
- strcpy(buf, "HTTP/1.0 200 OK\r\n");
- send(client, buf, strlen(buf), 0);
- sprintf(buf, "Content-Type: img/jpeg\r\n");
- send(client, buf, strlen(buf), 0);
- sprintf(buf, "Content-Length: %u\r\n",len);
- send(client, buf, strlen(buf), 0);
- strcpy(buf, "\r\n");
- send(client, buf, strlen(buf), 0);
- send(client,body,len,0);
+   strcpy(buf, "HTTP/1.0 200 OK\r\n");
+   send(client, buf, strlen(buf), 0);
+   sprintf(buf, "Content-Type: image/jpeg\r\n");
+   send(client, buf, strlen(buf), 0);
+   sprintf(buf, "Content-Length: %u\r\n",len);
+   send(client, buf, strlen(buf), 0);
+   strcpy(buf, "\r\n");
+   send(client, buf, strlen(buf), 0);
+   send(client,body,len,0);
 }
+
+#define WX_SCANCODE_MAX_LEN	65536
 
 int wx_handle_request(int client,char* filename)
 {
     char uuid[64];
-    char image[65536];
-    int  imglen; 
+    char* image = NULL;
+    int  len; 
     wx_param_t param;
-    wx_userinfo_t info;
-    int i = 0;
+    wx_contact_t* ct;
+    int i = 0,ret = 0;
+
     curl_global_init(CURL_GLOBAL_DEFAULT); 
 
     if (wx_get_uuid(uuid,sizeof(uuid)) <= 0)
      {
-       printf(" get uuid error ! \n");
-       return -1;
-     }
-     
-    if ((imglen = wx_get_scancode(image,sizeof(image),uuid)) <= 0)
+       fprintf(stderr," get uuid error ! \n");
+       ret = -1;
+       goto exit;
+    }
+
+    if ((image = malloc(WX_SCANCODE_MAX_LEN)) == NULL)
+    {
+       fprintf(stderr," get uuid error ! \n");
+       ret = -1;
+       goto exit;
+    }
+
+    if ((len = wx_get_scancode(image,WX_SCANCODE_MAX_LEN,uuid)) <= 0)
      {
-       printf(" get scancode  error ! \n");
-       return -1;     
+       fprintf(stderr," get scancode  error ! \n");
+       ret = -1;
+       goto exit;    
      }
-     wx_send_response(client,imglen,image);
+
+     wx_send_response(client,len,image);
+
 login:
-    if (wx_get_login_url(image,sizeof(image),uuid) <= 0 && i++ < 3)
+    if (wx_get_login_url(image,WX_SCANCODE_MAX_LEN,uuid) <= 0 && i++ < 3)
      {
-       printf(" get login url error ! \n");
        sleep(3);
        goto login;      
      }
-     
-    if (wx_get_login_param(&param,image) <= 0)
+    
+     if (i >= 3)
      {
-       printf(" get login param error ! \n");
-       return -1; 
+       fprintf(stderr," login confirm timeout ! \n");
+       ret = -1;
+       goto exit;  
      }
 
-    if (wx_get_self_info(&info,&param) <= 0)
+    if (wx_get_login_param(&param,image) <= 0)
      {
-       printf(" get self info error ! \n");
-       return -1; 
+       fprintf(stderr," get login param error ! \n");
+       ret = -1;
+       goto exit;
+     }
+
+    if (wx_get_self_info(&param) <= 0)
+     {
+       fprintf(stderr," get self info error ! \n");
+       ret = -1;
+       goto exit;
      } 
+
+    ct = (wx_contact_t*)image;
+
+    if ((len = wx_get_all_contacts(ct,WX_SCANCODE_MAX_LEN / sizeof(wx_contact_t),&param )) <= 0)
+     {
+        fprintf(stderr," get contacts error ! \n");
+        ret = -1;
+        goto exit;
+     } 
+    if (wx_send_msg_to_all(ct,len,"test message",&param) != 0)
+    {
+        fprintf(stderr," send msg error ! \n");
+        ret = -1;
+        goto exit;
+    }
+
+exit:
+    if (image)
+      free(image);
 
     curl_global_cleanup();
  
-    return 0;
+    return ret;
 } 
